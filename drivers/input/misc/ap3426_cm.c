@@ -52,7 +52,7 @@
 #include <linux/workqueue.h>
 #include <linux/timer.h>
 #include <linux/of_gpio.h>
-#include <linux/pm.h>
+#include <linux/wakelock.h>
 #include "ap3426_cm.h"
 #include <linux/regulator/consumer.h>
 #include <linux/ioctl.h>
@@ -212,9 +212,6 @@ static inline void dec(void)    { atomic_dec_if_positive(&log_indent); }
        #define DI_PS_CAL_THR_EXPECTED 150
        #define DI_PS_CAL_THR_MIN 0
 #endif
-
-static bool allow_suspend;
-module_param(allow_suspend, bool, 0644);
 
 static void pl_timer_callback(unsigned long pl_data);
 static int ap3426_power_ctl(struct ap3426_data *data, bool on);
@@ -910,7 +907,7 @@ static int ap3426_ps_enable(struct ap3426_data *ps_data, int enable)
 	if (misc_ps_opened){
 		distance = ap3426_get_object(client);
 		ap3426_report_abs_ts(ps_data->psensor_input_dev, ABS_DISTANCE, distance);
-		__pm_wakeup_event(&ps_data->ps_ws, 2*HZ);
+		wake_lock_timeout(&ps_data->ps_wakelock, 2*HZ);
 		pxvalue = ap3426_get_px_value(client);
 		PS_DBG("pxvalue:%d, distance:%d\n", pxvalue, distance);
 
@@ -2628,7 +2625,7 @@ static irqreturn_t ap3426_threaded_isr(int irq, void *client_data)
 		if (misc_ps_opened) {
 			distance = ap3426_get_object(data->client);
 			ap3426_report_abs_ts(data->psensor_input_dev, ABS_DISTANCE, distance);
-			__pm_wakeup_event(&data->ps_ws, 2*HZ);
+			wake_lock_timeout(&data->ps_wakelock, 2*HZ);
 		}
 	}
 
@@ -2910,9 +2907,9 @@ static int ap3426_probe(struct i2c_client *client,
 		goto err_sysfs_create_group;
 
 
-	DBG("wakeup_source_init(&data->ps_ws, 'ps_ws');\n");
+	DBG("wake_lock_init(&data->ps_wakelock, WAKE_LOCK_SUSPEND, 'ps_wakelock');\n");
 
-	wakeup_source_init(&data->ps_ws, "ps_ws");
+	wake_lock_init(&data->ps_wakelock, WAKE_LOCK_SUSPEND, "ps_wakelock");
 
 	/*
 	 * Register methods that can be invoked via:
@@ -2965,8 +2962,8 @@ err_sensors_classdev_register_ps:
 	sensors_classdev_unregister(&data->als_cdev);
 
 err_sensors_classdev_register:
-	DBG("wakeup_source_trash(&data->ps_ws);\n");
-	wakeup_source_trash(&data->ps_ws);
+	DBG("wake_lock_destroy(&data->ps_wakelock);\n");
+	wake_lock_destroy(&data->ps_wakelock);
 	sysfs_remove_group(&data->client->dev.kobj, &ap3426_attr_group);
 
 err_sysfs_create_group:
@@ -3062,8 +3059,8 @@ static int ap3426_remove(struct i2c_client *client)
 	if(&data->pl_timer)
 		del_timer(&data->pl_timer);
 
-	DBG("wakeup_source_trash(&data->ps_ws);\n");
-	wakeup_source_trash(&data->ps_ws);
+	DBG("wake_lock_destroy(&data->ps_wakelock);\n");
+	wake_lock_destroy(&data->ps_wakelock);
 
 	ap3426_unlock_mutex(data);
 
@@ -3104,9 +3101,6 @@ static int ap3426_suspend(struct device *dev)
 {
 	struct ap3426_data *ps_data = dev_get_drvdata(dev);
 
-	if (!allow_suspend)
-		return 0;
-
 	ENTRY("dev:%p)", dev);
 
 	ap3426_lock_mutex(ps_data);
@@ -3137,9 +3131,6 @@ static int ap3426_resume(struct device *dev)
 	int rc;
 	bool retry = true;
 
-	if (!allow_suspend)
-		return 0;
-
 	ENTRY("dev:%p)", dev);
 
 	ap3426_lock_mutex(ps_data);
@@ -3147,7 +3138,7 @@ static int ap3426_resume(struct device *dev)
 	ps_data->suspended = 0;
 
 	// power_int() currently disabled it because
-	// it may prevent system from waking up.
+	// it may prevent system from wakeing up.
 	//
 	// ap3426_power_init(ps_data,true);
 	ap3426_power_ctl(ps_data, true);

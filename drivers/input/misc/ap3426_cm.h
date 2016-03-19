@@ -236,7 +236,7 @@ struct ap3426_data {
 	bool			ps_enabled;
 	bool			ps_re_enable;
 	bool 			suspended;
-	struct wakeup_source	ps_ws;
+	struct wake_lock	ps_wakelock;
 	uint16_t		ps_thd_l;
 	uint16_t		ps_thd_h;
 	uint16_t		ps_calibration_min;
